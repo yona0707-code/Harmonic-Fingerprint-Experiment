@@ -5,6 +5,8 @@ short, playful musical personality test. Participants listen to eight harmony
 clips, describe how each one feels, and receive a personalised **Musical
 Personality** and **Harmonic Fingerprint** at the end.
 
+[Open the live app](https://harmonic-fingerprint-experiment-62ltwwysxjyzqnsp4gpq4w.streamlit.app/)
+
 Behind the playful result is an experiment about a serious question: do musical
 and cultural backgrounds affect the way people experience harmony, tension,
 resolution, and emotional colour?
