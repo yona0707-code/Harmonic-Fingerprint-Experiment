@@ -1,4 +1,4 @@
-"""Participant-level scoring for the combined harmony listening result."""
+"""Participant-level scoring for the seven-condition Kaeru result."""
 
 from __future__ import annotations
 
@@ -64,10 +64,13 @@ PERSONALITIES = {
 }
 
 HARMONIC_MATCHES = {
-    "Sound A": "Basic Triads",
-    "Sound B": "Seventh Chords",
-    "Sound C": "Ninth Chords",
-    "Sound D": "Diminished Seventh Harmony",
+    "Sound A": "Basic Major",
+    "Sound B": "Basic Minor",
+    "Sound C": "Seventh Rich Major",
+    "Sound D": "Seventh Rich Minor",
+    "Sound E": "Ninth Rich Major",
+    "Sound F": "Ninth Rich Minor",
+    "Sound G": "Diminished Seventh",
 }
 
 
@@ -148,26 +151,17 @@ def _rank_personalities(
 
 
 def calculate_musical_personality(
-    harmony_responses: list[dict[str, Any]],
     kaeru_responses: list[dict[str, Any]],
     kaeru_comparison: dict[str, Any],
 ) -> dict[str, Any]:
     """Calculate all dimensions, six traits, ranking, and harmonic match."""
-    if len(harmony_responses) != 4 or len(kaeru_responses) != 4:
-        raise ValueError("Both listening sections require exactly four responses.")
+    if len(kaeru_responses) != 7:
+        raise ValueError("The Kaeru experiment requires seven responses.")
 
     kaeru = {item["sound_label"]: item for item in kaeru_responses}
-    required_labels = {"Sound A", "Sound B", "Sound C", "Sound D"}
+    required_labels = {f"Sound {letter}" for letter in "ABCDEFG"}
     if set(kaeru) != required_labels:
-        raise ValueError("The same-melody responses must contain Sounds A, B, C, and D.")
-    harmony = {item["audio_filename"]: item for item in harmony_responses}
-    required_files = {
-        "major_resolved.wav", "major_unresolved.wav",
-        "minor_resolved.wav", "minor_unresolved.wav",
-    }
-    if set(harmony) != required_files:
-        raise ValueError("The resolution responses do not match the four expected files.")
-
+        raise ValueError("The Kaeru responses must contain Sounds A through G.")
     p = {label: item["pleasantness"] for label, item in kaeru.items()}
     t = {label: 8 - item["relaxation"] for label, item in kaeru.items()}
     f = {label: item["familiarity"] for label, item in kaeru.items()}
@@ -175,31 +169,27 @@ def calculate_musical_personality(
     most_complex = kaeru_comparison.get("most_complex_sound")
     most_familiar = kaeru_comparison.get("most_familiar_sound")
 
-    resolved = [harmony["major_resolved.wav"], harmony["minor_resolved.wav"]]
-    unresolved = [harmony["major_unresolved.wav"], harmony["minor_unresolved.wav"]]
-    resolved_p = mean(item["pleasantness"] for item in resolved)
-    unresolved_p = mean(item["pleasantness"] for item in unresolved)
-    resolved_t = mean(8 - item["relaxation"] for item in resolved)
-    unresolved_t = mean(8 - item["relaxation"] for item in unresolved)
-
-    rich_p = mean((p["Sound B"], p["Sound C"]))
-    richness_score = 50 + (rich_p - p["Sound A"]) * 8.33
-    if favourite in ("Sound B", "Sound C"):
+    rich_labels = ("Sound C", "Sound D", "Sound E", "Sound F")
+    basic_labels = ("Sound A", "Sound B")
+    rich_p = mean(p[label] for label in rich_labels)
+    basic_p = mean(p[label] for label in basic_labels)
+    richness_score = 50 + (rich_p - basic_p) * 8.33
+    if favourite in rich_labels:
         richness_score += 10
-    if most_complex in ("Sound B", "Sound C"):
+    if most_complex in rich_labels:
         richness_score += 5
-    if favourite == "Sound A":
+    if favourite in basic_labels:
         richness_score -= 10
     richness_score = clamp(richness_score)
 
     simplicity_score = 100 - richness_score
-    if favourite == "Sound A":
+    if favourite in basic_labels:
         simplicity_score += 10
-    if most_familiar == "Sound A":
+    if most_familiar in basic_labels:
         simplicity_score += 5
     simplicity_score = clamp(simplicity_score)
 
-    rich_tension = mean((t["Sound B"], t["Sound C"]))
+    rich_tension = mean(t[label] for label in rich_labels)
     pleasant_component = (rich_p - 1) / 6 * 100
     relaxation_component = (7 - rich_tension) / 6 * 100
     rich_comfort_score = clamp(
@@ -208,25 +198,16 @@ def calculate_musical_personality(
     rich_stimulation_score = 0.6 * pleasant_component + 0.4 * (
         (rich_tension - 1) / 6 * 100
     )
-    if most_complex in ("Sound B", "Sound C"):
+    if most_complex in rich_labels:
         rich_stimulation_score += 10
     rich_stimulation_score = clamp(rich_stimulation_score)
 
-    tension_tolerance_score = mean(
-        (
-            enjoyed_tension(p["Sound D"], t["Sound D"]),
-            enjoyed_tension(unresolved_p, unresolved_t),
-        )
-    )
-    if favourite == "Sound D":
+    tension_tolerance_score = enjoyed_tension(p["Sound G"], t["Sound G"])
+    if favourite == "Sound G":
         tension_tolerance_score += 15
-    if unresolved_p > resolved_p and unresolved_t > resolved_t:
-        tension_tolerance_score += 10
     tension_tolerance_score = clamp(tension_tolerance_score)
 
-    emotional_sensitivity_score = clamp(
-        mean((_variation_score(kaeru_responses), _variation_score(harmony_responses)))
-    )
+    emotional_sensitivity_score = _variation_score(kaeru_responses)
     kaeru_average_p = mean(p.values())
     kaeru_p_range = max(p.values()) - min(p.values())
     openness_score = (
@@ -249,22 +230,22 @@ def calculate_musical_personality(
     scores = {
         "The Pure & Simple Listener": clamp(
             0.70 * simplicity_score
-            + 0.20 * ((f["Sound A"] - 1) / 6 * 100)
+            + 0.20 * ((mean(f[label] for label in basic_labels) - 1) / 6 * 100)
             + 0.10 * (100 - emotional_sensitivity_score)
-            + (10 if favourite == "Sound A" else 0)
+            + (10 if favourite in basic_labels else 0)
         ),
         "The Harmonic Dreamer": clamp(
             0.50 * richness_score + 0.40 * rich_comfort_score + 0.10 * openness_score
-            + (10 if favourite == "Sound C" else 5 if favourite == "Sound B" else 0)
+            + (10 if favourite in ("Sound E", "Sound F") else 5 if favourite in ("Sound C", "Sound D") else 0)
         ),
         "The Colour Seeker": clamp(
             0.45 * richness_score + 0.40 * rich_stimulation_score
             + 0.15 * emotional_sensitivity_score
-            + (10 if most_complex in ("Sound B", "Sound C") else 0)
+            + (10 if most_complex in rich_labels else 0)
         ),
         "The Tension Seeker": clamp(
             0.75 * tension_tolerance_score + 0.25 * emotional_sensitivity_score
-            + (10 if favourite == "Sound D" else 0)
+            + (10 if favourite == "Sound G" else 0)
         ),
         "The Emotional Storyteller": clamp(
             0.80 * emotional_sensitivity_score + 0.20 * richness_score

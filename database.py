@@ -18,12 +18,12 @@ def save_completed_experiment(
     background_answers: Mapping[str, Any],
     responses: Sequence[Mapping[str, Any]],
     comparison_answers: Mapping[str, Any],
-    experiment_type: str = "diminished_context",
+    experiment_type: str = "kaeru_harmony",
     submission_id: str | None = None,
 ) -> None:
-    """Insert one participant and exactly four linked listening responses."""
-    if len(responses) != 4:
-        raise ValueError("A completed experiment must contain exactly four responses.")
+    """Insert one participant and exactly seven linked Kaeru responses."""
+    if len(responses) != 7:
+        raise ValueError("A completed Kaeru experiment must contain seven responses.")
 
     client = get_supabase_client()
     participant_row = {
@@ -61,6 +61,7 @@ def save_completed_experiment(
             "experiment_type": experiment_type,
             "trial_number": response["trial_number"],
             "audio_filename": response["audio_filename"],
+            "condition_key": response["condition_key"],
             "pleasantness": response["pleasantness"],
             "relaxation": response["relaxation"],
             "tension": 8 - response["relaxation"],
@@ -72,7 +73,7 @@ def save_completed_experiment(
     ]
 
     # The database function inserts/reuses the participant and atomically creates
-    # a distinct submission plus four responses. A retry uses a fresh submission
+    # a distinct submission plus seven responses. A retry uses a fresh submission
     # UUID; this function is only called once per UI save attempt.
     client.rpc(
         "save_completed_experiment",

@@ -18,17 +18,14 @@ from musical_personality import PERSONALITIES, calculate_musical_personality
 
 APP_DIR = Path(__file__).resolve().parent
 SOUND_CHECK_PATH = APP_DIR / "sound_check.wav"
-SOUNDS = (
-    ("Sound A", "major_resolved.wav"),
-    ("Sound B", "major_unresolved.wav"),
-    ("Sound C", "minor_resolved.wav"),
-    ("Sound D", "minor_unresolved.wav"),
-)
 KAERU_SOUNDS = (
-    ("Sound A", "kaeru_basic_triads.wav"),
-    ("Sound B", "kaeru_sevenths.wav"),
-    ("Sound C", "kaeru_ninths_from_basic.wav"),
-    ("Sound D", "kaeru_diminished_sevenths.wav"),
+    ("Sound A", "basic_major", "kaeru_basic_major.wav"),
+    ("Sound B", "basic_minor", "kaeru_basic_minor.wav"),
+    ("Sound C", "seventh_major", "kaeru_seventh_rich_major.wav"),
+    ("Sound D", "seventh_minor", "kaeru_seventh_rich_minor.wav"),
+    ("Sound E", "ninth_major", "kaeru_ninth_rich_major.wav"),
+    ("Sound F", "ninth_minor", "kaeru_minor_ninth.wav"),
+    ("Sound G", "diminished_seventh", "kaeru_diminished_seventh.wav"),
 )
 
 EMOTIONS = (
@@ -114,12 +111,8 @@ def go_back_to_previous_page() -> None:
 
     if page == "sound_check":
         st.session_state.page = "introduction"
-    elif page == "listening_comparison":
-        st.session_state.page = "sound_check"
-    elif page == "part_one_complete":
-        st.session_state.page = "listening_comparison"
     elif page == "kaeru_listening":
-        st.session_state.page = "part_one_complete"
+        st.session_state.page = "sound_check"
     elif page == "background_questionnaire":
         st.session_state.background_draft = {
             key: value
@@ -127,10 +120,6 @@ def go_back_to_previous_page() -> None:
             if key.startswith("background_") and key != "background_draft"
         }
         st.session_state.page = "kaeru_listening"
-    elif page == "harmonic_fingerprint":
-        st.session_state.page = "background_questionnaire"
-    elif page == "kaeru_fingerprint":
-        st.session_state.page = "background_questionnaire"
 
     st.session_state.scroll_to_top = True
 
@@ -145,14 +134,14 @@ def show_back_button() -> None:
     )
 
 
-def start_listening_comparison(experiment_type: str = "diminished_context") -> None:
-    """Start a comparative listening session in the fixed Sound A–D order."""
+def start_listening_comparison() -> None:
+    """Start the seven-condition Kaeru listening session."""
     st.session_state.responses = []
-    st.session_state.experiment_type = experiment_type
-    submission_key = f"{experiment_type}_submission_id"
+    st.session_state.experiment_type = "kaeru_harmony"
+    submission_key = "kaeru_harmony_submission_id"
     st.session_state.setdefault(submission_key, str(uuid.uuid4()))
     st.session_state.submission_id = st.session_state[submission_key]
-    st.session_state.data_saved = st.session_state.get(f"{experiment_type}_saved", False)
+    st.session_state.data_saved = st.session_state.get("kaeru_harmony_saved", False)
     st.session_state.save_attempted = False
     st.session_state.pop("database_error", None)
     st.session_state.pop("save_error", None)
@@ -163,20 +152,7 @@ def start_listening_comparison(experiment_type: str = "diminished_context") -> N
         if key.startswith("sound_") or key.startswith("comparison_"):
             del st.session_state[key]
     st.session_state.comparison_answers = {}
-    st.session_state.page = (
-        "kaeru_listening" if experiment_type == "kaeru_harmony"
-        else "listening_comparison"
-    )
-
-
-def show_part_one_complete() -> None:
-    """Bridge the listening sections without showing an interim result."""
-    show_back_button()
-    st.title("Part 1 complete")
-    st.write("Next, you’ll hear the same melody with different accompaniments.")
-    if st.button("Continue to Part 2", type="primary", use_container_width=True):
-        start_listening_comparison("kaeru_harmony")
-        st.rerun()
+    st.session_state.page = "kaeru_listening"
 
 
 def display_emotion(response: dict) -> str:
@@ -186,138 +162,8 @@ def display_emotion(response: dict) -> str:
     return response["emotion"]
 
 
-def calculate_harmonic_fingerprint(responses: list[dict]) -> dict:
-    """Calculate participant-only summaries from the four listening responses."""
-    enriched = [
-        {**response, "tension": 8 - response["relaxation"]}
-        for response in responses
-    ]
-
-    def averages(selected: list[dict]) -> dict:
-        return {
-            "pleasantness": sum(item["pleasantness"] for item in selected) / len(selected),
-            "tension": sum(item["tension"] for item in selected) / len(selected),
-        }
-
-    major = [item for item in enriched if item["audio_filename"].startswith("major_")]
-    minor = [item for item in enriched if item["audio_filename"].startswith("minor_")]
-    resolved = [
-        item for item in enriched
-        if item["audio_filename"].endswith("_resolved.wav")
-    ]
-    unresolved = [
-        item for item in enriched
-        if item["audio_filename"].endswith("_unresolved.wav")
-    ]
-    emotion_counts = Counter(display_emotion(item) for item in enriched)
-    highest_count = max(emotion_counts.values())
-
-    return {
-        "responses": enriched,
-        "overall": averages(enriched),
-        "major": averages(major),
-        "minor": averages(minor),
-        "resolved": averages(resolved),
-        "unresolved": averages(unresolved),
-        "common_emotions": [
-            emotion for emotion, count in emotion_counts.items()
-            if count == highest_count
-        ],
-        "emotion_counts": emotion_counts,
-    }
-
-
-def choose_fingerprint_title(fingerprint: dict) -> str:
-    """Choose a descriptive title using simple, participant-only rules."""
-    pleasantness = fingerprint["overall"]["pleasantness"]
-    tension = fingerprint["overall"]["tension"]
-    emotions = fingerprint["emotion_counts"]
-    mysterious_is_most_common = (
-        emotions.get("Mysterious", 0) > 0
-        and emotions["Mysterious"] == max(emotions.values())
-    )
-
-    if tension >= 5 and pleasantness >= 4:
-        return "The Suspense Interpreter"
-    if mysterious_is_most_common:
-        return "The Mystery Seeker"
-    if tension >= 5 and pleasantness < 4:
-        return "The Dramatic Listener"
-    if tension <= 3:
-        return "The Calm Interpreter"
-    if abs(pleasantness - 4) <= 0.75 and abs(tension - 4) <= 0.75:
-        return "The Balanced Observer"
-    return "The Emotional Explorer"
-
-
-def comparison_sentence(
-    fingerprint: dict, first_key: str, second_key: str, comparison_name: str
-) -> str:
-    """Describe a two-condition comparison using the 0.75 readability threshold."""
-    first = fingerprint[first_key]
-    second = fingerprint[second_key]
-    pleasantness_difference = first["pleasantness"] - second["pleasantness"]
-    tension_difference = first["tension"] - second["tension"]
-
-    if comparison_name == "major_minor":
-        if abs(pleasantness_difference) < 0.75 and abs(tension_difference) < 0.75:
-            return "Your responses to major and minor were very similar."
-        if abs(tension_difference) >= abs(pleasantness_difference):
-            more_tense = "major" if tension_difference > 0 else "minor"
-            return f"In this experiment, the {more_tense} sounds felt noticeably more tense to you."
-        more_pleasant = "major" if pleasantness_difference > 0 else "minor"
-        return f"In this experiment, the {more_pleasant} sounds felt noticeably more pleasant to you."
-
-    if abs(pleasantness_difference) < 0.75 and abs(tension_difference) < 0.75:
-        return "Whether the harmony resolved made little difference to your ratings."
-    if abs(tension_difference) >= abs(pleasantness_difference):
-        more_tense = "resolved" if tension_difference > 0 else "unresolved"
-        return f"The {more_tense} endings created noticeably more tension for you."
-    more_pleasant = "resolved" if pleasantness_difference > 0 else "unresolved"
-    return f"The {more_pleasant} sounds felt noticeably more pleasant to you."
-
-
-def generate_result_description(fingerprint: dict) -> str:
-    """Create a cautious short description that changes with the ratings."""
-    pleasantness = fingerprint["overall"]["pleasantness"]
-    tension = fingerprint["overall"]["tension"]
-    if tension >= 5:
-        tension_phrase = "fairly tense"
-    elif tension <= 3:
-        tension_phrase = "fairly relaxed"
-    else:
-        tension_phrase = "neither strongly tense nor strongly relaxed"
-    if pleasantness >= 5:
-        pleasantness_phrase = "generally pleasant"
-    elif pleasantness <= 3:
-        pleasantness_phrase = "generally unpleasant"
-    else:
-        pleasantness_phrase = "not strongly pleasant or unpleasant"
-
-    return (
-        f"You experienced these four sounds as {tension_phrase} and {pleasantness_phrase}. "
-        f"{comparison_sentence(fingerprint, 'major', 'minor', 'major_minor')} "
-        f"{comparison_sentence(fingerprint, 'resolved', 'unresolved', 'resolution')}"
-    )
-
-
-def generate_key_findings(fingerprint: dict) -> list[str]:
-    """Return three readable findings without treating small differences as meaningful."""
-    findings = [
-        comparison_sentence(fingerprint, "major", "minor", "major_minor"),
-        comparison_sentence(fingerprint, "resolved", "unresolved", "resolution"),
-    ]
-    counts = fingerprint["emotion_counts"]
-    if max(counts.values()) > 1:
-        repeated = ", ".join(fingerprint["common_emotions"])
-        findings.append(f"You selected {repeated} more than once across the four sounds.")
-    elif len(counts) == 4:
-        findings.append("You chose a different emotional association for each sound.")
-    return findings
-
-
 def render_emotional_map(fingerprint: dict) -> None:
-    """Render the four participant ratings without revealing conditions."""
+    """Render the seven Kaeru ratings without revealing their conditions."""
     figure, axis = plt.subplots(figsize=(6, 5))
     for response in sorted(fingerprint["responses"], key=lambda item: item["trial_number"]):
         axis.scatter(response["pleasantness"], response["tension"], s=65)
@@ -407,136 +253,12 @@ def show_sound_check() -> None:
             st.warning("Please adjust your volume and play the sound again.")
         else:
             st.session_state.heard_clearly = st.session_state.heard_clearly_input
-            start_listening_comparison("diminished_context")
-            st.rerun()
-
-
-def show_listening_comparison() -> None:
-    """Collect intentional comparative judgments with freely replayable sounds."""
-    # Restore saved answers when navigating back from the questionnaire. Streamlit
-    # may remove widget state while those widgets are not rendered.
-    for response in st.session_state.get("responses", []):
-        prefix = f"sound_{response['trial_number']}"
-        for field in ("pleasantness", "relaxation", "emotion", "other_emotion"):
-            st.session_state.setdefault(f"{prefix}_{field}", response.get(field, ""))
-    saved_comparison = st.session_state.get("comparison_answers", {})
-    st.session_state.setdefault(
-        "comparison_most_tense", saved_comparison.get("most_tense_sound")
-    )
-    st.session_state.setdefault(
-        "comparison_preferred", saved_comparison.get("preferred_sound")
-    )
-    st.session_state.setdefault(
-        "comparison_overall_association", saved_comparison.get("overall_association", "")
-    )
-    show_back_button()
-    st.title("Part 1 of 2")
-    st.header("Harmony and Resolution")
-    st.write(
-        "Listen to the four sounds below. You may replay them as many times as "
-        "you like and switch between them before answering."
-    )
-    st.write(
-        "There are no correct or incorrect answers. Focus on how each sound feels to you."
-    )
-    for sound_label, audio_filename in SOUNDS:
-        audio_path = APP_DIR / audio_filename
-        st.subheader(sound_label)
-        if not audio_path.is_file():
-            st.error("A required sound is unavailable. Please contact the researcher.")
-            return
-        st.audio(str(audio_path), format="audio/wav")
-
-    st.header("Your responses")
-    for trial_number, (sound_label, _) in enumerate(SOUNDS, start=1):
-        prefix = f"sound_{trial_number}"
-        st.subheader(sound_label)
-        st.radio(
-            "How pleasant or unpleasant did this sound feel to you?",
-            range(1, 8), index=None, horizontal=True, key=f"{prefix}_pleasantness",
-            captions=["Very unpleasant", "", "", "Neither", "", "", "Very pleasant"],
-        )
-        st.radio(
-            "How tense or relaxed did this sound feel to you?",
-            range(1, 8), index=None, horizontal=True, key=f"{prefix}_relaxation",
-            captions=["Very tense", "", "", "Neither", "", "", "Very relaxed"],
-        )
-        emotion = st.radio(
-            "Which emotion best matches this sound?", EMOTIONS, index=None,
-            key=f"{prefix}_emotion",
-        )
-        if emotion == "Other":
-            st.text_input(
-                "Please describe the emotion in one or two words.", max_chars=50,
-                key=f"{prefix}_other_emotion",
-            )
-        st.divider()
-
-    st.subheader("Compare the sounds")
-    st.radio(
-        "Which sound felt the most tense?",
-        (*[label for label, _ in SOUNDS], "They felt about the same"),
-        index=None, key="comparison_most_tense",
-    )
-    st.radio(
-        "Which sound did you like the most?",
-        (*[label for label, _ in SOUNDS], "No clear preference"),
-        index=None, key="comparison_preferred",
-    )
-    st.text_area(
-        "Did any of the sounds give you a particularly strong image, memory, or feeling?",
-        help=("Optional — you can mention the sound label if you want, for example "
-              "“Sound C reminded me of a suspenseful movie scene.”"),
-        max_chars=400, key="comparison_overall_association",
-    )
-
-    if st.button("Continue", type="primary", use_container_width=True):
-        missing = []
-        responses = []
-        for trial_number, (sound_label, audio_filename) in enumerate(SOUNDS, start=1):
-            prefix = f"sound_{trial_number}"
-            pleasantness = st.session_state.get(f"{prefix}_pleasantness")
-            relaxation = st.session_state.get(f"{prefix}_relaxation")
-            emotion = st.session_state.get(f"{prefix}_emotion")
-            other = st.session_state.get(f"{prefix}_other_emotion", "").strip()
-            if pleasantness is None or relaxation is None or emotion is None:
-                missing.append(sound_label)
-            elif emotion == "Other" and not other:
-                missing.append(f"{sound_label} Other emotion description")
-            responses.append({
-                "trial_number": trial_number, "sound_label": sound_label,
-                "audio_filename": audio_filename, "pleasantness": pleasantness,
-                "relaxation": relaxation, "emotion": emotion,
-                "other_emotion": other if emotion == "Other" else "",
-            })
-        if st.session_state.get("comparison_most_tense") is None:
-            missing.append("the most-tense comparison")
-        if st.session_state.get("comparison_preferred") is None:
-            missing.append("the favourite-sound comparison")
-        if missing:
-            st.warning("Please complete all required responses. Missing: " + ", ".join(missing) + ".")
-        else:
-            st.session_state.responses = responses
-            st.session_state.comparison_answers = {
-                "most_tense_sound": st.session_state.comparison_most_tense,
-                "preferred_sound": st.session_state.comparison_preferred,
-                "overall_association": st.session_state.get(
-                    "comparison_overall_association", ""
-                ).strip(),
-            }
-            # Preserve this completed section while the existing save flow runs;
-            # the second section can then contribute to one combined result.
-            st.session_state.harmony_responses = responses
-            st.session_state.harmony_comparison_answers = dict(
-                st.session_state.comparison_answers
-            )
-            st.session_state.page = "part_one_complete"
-            st.session_state.scroll_to_top = True
+            start_listening_comparison()
             st.rerun()
 
 
 def show_kaeru_listening() -> None:
-    """Collect all four same-melody ratings and direct comparisons."""
+    """Collect all seven chord-condition ratings and direct comparisons."""
     for response in st.session_state.get("responses", []):
         prefix = f"kaeru_sound_{response['trial_number']}"
         for field in (
@@ -557,15 +279,35 @@ def show_kaeru_listening() -> None:
         st.session_state.setdefault(f"kaeru_comparison_{widget_suffix}", default)
 
     show_back_button()
-    st.title("Part 2 of 2")
-    st.header("Same Melody, Different Harmony")
-    st.write("The melody is the same in all four sounds, but the accompaniment changes.")
+    st.title("Kaeru listening experiment")
+    st.header("Same Progression, Different Chord Quality")
+    st.write("All seven sounds contain chords only; there is no melody part.")
     st.write(
         "Listen to each version as many times as you like and compare how they feel to you."
     )
     st.write("There are no correct or incorrect answers.")
 
-    for sound_label, audio_filename in KAERU_SOUNDS:
+    completed_conditions = 0
+    for trial_number in range(1, len(KAERU_SOUNDS) + 1):
+        prefix = f"kaeru_sound_{trial_number}"
+        required_values = (
+            st.session_state.get(f"{prefix}_pleasantness"),
+            st.session_state.get(f"{prefix}_relaxation"),
+            st.session_state.get(f"{prefix}_emotion"),
+            st.session_state.get(f"{prefix}_familiarity"),
+        )
+        emotion = st.session_state.get(f"{prefix}_emotion")
+        other_complete = (
+            emotion != "Other"
+            or bool((st.session_state.get(f"{prefix}_other_emotion") or "").strip())
+        )
+        if all(value is not None for value in required_values) and other_complete:
+            completed_conditions += 1
+    st.progress(
+        completed_conditions / len(KAERU_SOUNDS),
+        text=f"{completed_conditions} of {len(KAERU_SOUNDS)} conditions completed",
+    )
+    for sound_label, _, audio_filename in KAERU_SOUNDS:
         st.subheader(sound_label)
         audio_path = APP_DIR / audio_filename
         if not audio_path.is_file():
@@ -574,7 +316,7 @@ def show_kaeru_listening() -> None:
         st.audio(str(audio_path), format="audio/wav")
 
     st.header("Your responses")
-    for trial_number, (sound_label, _) in enumerate(KAERU_SOUNDS, start=1):
+    for trial_number, (sound_label, _, _) in enumerate(KAERU_SOUNDS, start=1):
         prefix = f"kaeru_sound_{trial_number}"
         st.subheader(sound_label)
         st.radio(
@@ -603,7 +345,7 @@ def show_kaeru_listening() -> None:
         )
         st.divider()
 
-    labels = tuple(label for label, _ in KAERU_SOUNDS)
+    labels = tuple(label for label, _, _ in KAERU_SOUNDS)
     st.subheader("Compare the sounds")
     st.radio(
         "Which version did you like the most?",
@@ -634,7 +376,9 @@ def show_kaeru_listening() -> None:
     if st.button("Continue", type="primary", use_container_width=True):
         missing = []
         responses = []
-        for trial_number, (sound_label, audio_filename) in enumerate(KAERU_SOUNDS, start=1):
+        for trial_number, (sound_label, condition_key, audio_filename) in enumerate(
+            KAERU_SOUNDS, start=1
+        ):
             prefix = f"kaeru_sound_{trial_number}"
             values = {
                 field: st.session_state.get(f"{prefix}_{field}")
@@ -647,6 +391,7 @@ def show_kaeru_listening() -> None:
                 missing.append(f"{sound_label} Other emotion description")
             responses.append({
                 "experiment_type": "kaeru_harmony",
+                "condition_key": condition_key,
                 "trial_number": trial_number,
                 "sound_label": sound_label,
                 "audio_filename": audio_filename,
@@ -689,10 +434,7 @@ def show_kaeru_listening() -> None:
 
 def show_background_questionnaire() -> None:
     """Collect the participant's background answers in one validated form."""
-    if (
-        len(st.session_state.get("harmony_responses", [])) != 4
-        or len(st.session_state.get("kaeru_responses", [])) != 4
-    ):
+    if len(st.session_state.get("kaeru_responses", [])) != len(KAERU_SOUNDS):
         st.session_state.page = "kaeru_listening"
         st.rerun()
 
@@ -870,15 +612,12 @@ def show_background_questionnaire() -> None:
                 "listening_device": listening_device,
             }
             complete_listening_data = (
-                len(st.session_state.get("harmony_responses", [])) == 4
-                and len(st.session_state.get("kaeru_responses", [])) == 4
-                and all(
-                    st.session_state.get(key, {}).get("most_tense_sound")
-                    and st.session_state.get(key, {}).get("preferred_sound")
-                    for key in (
-                        "harmony_comparison_answers",
-                        "kaeru_comparison_answers",
-                    )
+                len(st.session_state.get("kaeru_responses", [])) == len(KAERU_SOUNDS)
+                and st.session_state.get("kaeru_comparison_answers", {}).get(
+                    "most_tense_sound"
+                )
+                and st.session_state.get("kaeru_comparison_answers", {}).get(
+                    "preferred_sound"
                 )
                 and st.session_state.get("kaeru_comparison_answers", {}).get(
                     "most_complex_sound"
@@ -889,7 +628,7 @@ def show_background_questionnaire() -> None:
             )
             if not complete_listening_data:
                 st.error(
-                    "Your listening answers are incomplete. Please return to Part 2 "
+                    "Your listening answers are incomplete. Please return to the listening page "
                     "and complete the required questions."
                 )
                 return
@@ -900,29 +639,20 @@ def show_background_questionnaire() -> None:
 
 
 def attempt_database_save() -> None:
-    """Save each section once, retaining answers and partial-save state on failure."""
+    """Save the Kaeru experiment once, retaining answers on failure."""
     st.session_state.save_attempted = True
-    for experiment_type in ("diminished_context", "kaeru_harmony"):
-        st.session_state.setdefault(
-            f"{experiment_type}_submission_id", str(uuid.uuid4())
-        )
+    st.session_state.setdefault("kaeru_harmony_submission_id", str(uuid.uuid4()))
     try:
-        for experiment_type, response_key, comparison_key in (
-            ("diminished_context", "harmony_responses", "harmony_comparison_answers"),
-            ("kaeru_harmony", "kaeru_responses", "kaeru_comparison_answers"),
-        ):
-            saved_key = f"{experiment_type}_saved"
-            if st.session_state.get(saved_key, False):
-                continue
+        if not st.session_state.get("kaeru_harmony_saved", False):
             save_completed_experiment(
                 st.session_state.participant_id,
                 st.session_state.background_answers,
-                st.session_state[response_key],
-                st.session_state[comparison_key],
-                experiment_type,
-                st.session_state[f"{experiment_type}_submission_id"],
+                st.session_state.kaeru_responses,
+                st.session_state.kaeru_comparison_answers,
+                "kaeru_harmony",
+                st.session_state.kaeru_harmony_submission_id,
             )
-            st.session_state[saved_key] = True
+            st.session_state.kaeru_harmony_saved = True
     except Exception as exc:  # Supabase may raise API, auth, or transport errors.
         st.session_state.data_saved = False
         st.session_state.save_error = repr(exc)
@@ -961,20 +691,16 @@ def show_database_save() -> None:
 
 
 def show_musical_personality_result() -> bool:
-    """Render the combined reward once both independently saved sections exist."""
-    harmony_responses = st.session_state.get("harmony_responses", [])
+    """Render the participant result from the seven Kaeru responses."""
     kaeru_responses = st.session_state.get("kaeru_responses", [])
-    harmony_comparison = st.session_state.get("harmony_comparison_answers", {})
     kaeru_comparison = st.session_state.get("kaeru_comparison_answers", {})
-    if len(harmony_responses) != 4 or len(kaeru_responses) != 4:
+    if len(kaeru_responses) != len(KAERU_SOUNDS):
         return False
 
     try:
-        result = calculate_musical_personality(
-            harmony_responses, kaeru_responses, kaeru_comparison
-        )
+        result = calculate_musical_personality(kaeru_responses, kaeru_comparison)
     except (KeyError, TypeError, ValueError) as error:
-        st.error("Your combined result could not be calculated from the saved answers.")
+        st.error("Your result could not be calculated from the saved answers.")
         with st.expander("Development/debug details", expanded=False):
             st.code(f"{type(error).__name__}: {error}")
         return True
@@ -996,9 +722,8 @@ def show_musical_personality_result() -> bool:
     )
 
     kaeru_fingerprint = calculate_kaeru_fingerprint(kaeru_responses)
-    harmony_fingerprint = calculate_harmonic_fingerprint(harmony_responses)
     all_emotions = Counter(
-        display_emotion(item) for item in harmony_responses + kaeru_responses
+        display_emotion(item) for item in kaeru_responses
     )
     favourite_emotion = sorted(
         all_emotions, key=lambda emotion: (-all_emotions[emotion], emotion)
@@ -1026,22 +751,16 @@ def show_musical_personality_result() -> bool:
     st.write(f"**Harmony preference:** {harmony_preference}")
 
     st.subheader("What were you actually hearing?")
-    st.write("**Sound A — Basic Triads**  \nSimple C, F and G chords.")
-    st.write(
-        "**Sound B — Seventh Chords**  \n"
-        "Extra notes add more harmonic colour."
+    condition_names = (
+        "Basic Major", "Basic Minor", "Seventh Rich Major",
+        "Seventh Rich Minor", "Ninth Rich Major", "Ninth Rich Minor",
+        "Diminished Seventh",
     )
-    st.write(
-        "**Sound C — Ninth Chords**  \n"
-        "The harmony is extended further, creating an even richer sound."
-    )
-    st.write(
-        "**Sound D — Diminished Seventh Harmony**  \n"
-        "Unstable chords briefly increase tension before resolving."
-    )
+    for (sound_label, _, _), condition_name in zip(KAERU_SOUNDS, condition_names):
+        st.write(f"**{sound_label} — {condition_name}**")
 
     with st.expander("See my detailed listening results", expanded=False):
-        st.markdown("#### Same Melody, Different Harmony")
+        st.markdown("#### Same Progression, Different Chord Quality")
         pleasant_col, tension_col, familiar_col = st.columns(3)
         pleasant_col.metric(
             "Overall Pleasantness", f"{kaeru_fingerprint['pleasantness']:.1f} / 7"
@@ -1077,27 +796,8 @@ def show_musical_personality_result() -> bool:
         st.markdown("##### Familiarity Ratings")
         render_familiarity_chart(kaeru_fingerprint["responses"])
 
-        st.markdown("#### Harmony and Resolution")
-        resolved_col, unresolved_col = st.columns(2)
-        resolved_col.metric(
-            "Resolved pleasantness",
-            f"{harmony_fingerprint['resolved']['pleasantness']:.1f} / 7",
-        )
-        resolved_col.metric(
-            "Resolved tension", f"{harmony_fingerprint['resolved']['tension']:.1f} / 7"
-        )
-        unresolved_col.metric(
-            "Unresolved pleasantness",
-            f"{harmony_fingerprint['unresolved']['pleasantness']:.1f} / 7",
-        )
-        unresolved_col.metric(
-            "Unresolved tension",
-            f"{harmony_fingerprint['unresolved']['tension']:.1f} / 7",
-        )
-        render_emotional_map(harmony_fingerprint)
-
         st.markdown("#### Individual ratings")
-        st.markdown("##### Same Melody, Different Harmony")
+        st.markdown("##### Same Progression, Different Chord Quality")
         for response in kaeru_fingerprint["responses"]:
             st.write(
                 f"**{response['sound_label']}:** pleasantness "
@@ -1105,15 +805,8 @@ def show_musical_personality_result() -> bool:
                 f"familiarity {response['familiarity']} / 7, "
                 f"emotion {display_emotion(response)}"
             )
-        st.markdown("##### Harmony and Resolution")
-        for response in harmony_fingerprint["responses"]:
-            st.write(
-                f"**{response['sound_label']}:** pleasantness "
-                f"{response['pleasantness']} / 7, tension {response['tension']} / 7, "
-                f"emotion {display_emotion(response)}"
-            )
         st.markdown("#### Direct comparison answers")
-        st.markdown("##### Same Melody, Different Harmony")
+        st.markdown("##### Same Progression, Different Chord Quality")
         st.write(
             f"**Favourite:** {kaeru_comparison.get('preferred_sound', 'Not answered')}"
         )
@@ -1127,15 +820,6 @@ def show_musical_personality_result() -> bool:
         st.write(
             "**Most familiar:** "
             f"{kaeru_comparison.get('most_familiar_sound', 'Not answered')}"
-        )
-        st.markdown("##### Harmony and Resolution")
-        st.write(
-            "**Favourite:** "
-            f"{harmony_comparison.get('preferred_sound', 'Not answered')}"
-        )
-        st.write(
-            "**Most tense:** "
-            f"{harmony_comparison.get('most_tense_sound', 'Not answered')}"
         )
 
     with st.expander("Development/debug details", expanded=False):
@@ -1158,146 +842,6 @@ def show_musical_personality_result() -> bool:
     return True
 
 
-def show_harmonic_fingerprint() -> None:
-    """Display the participant's Harmonic Fingerprint and collapsed raw details."""
-    responses = st.session_state.get("responses", [])
-    if len(responses) != len(SOUNDS):
-        st.session_state.page = "listening_comparison"
-        st.rerun()
-    if "background_answers" not in st.session_state:
-        st.session_state.page = "background_questionnaire"
-        st.rerun()
-
-    if show_musical_personality_result():
-        return
-
-    show_back_button()
-    fingerprint = calculate_harmonic_fingerprint(responses)
-    st.title("Your Harmonic Fingerprint")
-    st.header(choose_fingerprint_title(fingerprint))
-    st.write(generate_result_description(fingerprint))
-
-    st.subheader("What stood out in your responses?")
-    for finding in generate_key_findings(fingerprint):
-        st.markdown(f"- {finding}")
-
-    pleasantness_column, tension_column = st.columns(2)
-    pleasantness_column.metric(
-        "Pleasantness", f"{fingerprint['overall']['pleasantness']:.1f} / 7"
-    )
-    tension_column.metric("Tension", f"{fingerprint['overall']['tension']:.1f} / 7")
-    common_emotions = fingerprint["common_emotions"]
-    emotion_label = (
-        "Most common emotion"
-        if len(common_emotions) == 1
-        else "Most common emotions"
-    )
-    st.write(f"**{emotion_label}:** {', '.join(common_emotions)}")
-
-    comparison_answers = st.session_state.get("comparison_answers", {})
-    st.subheader("Your direct comparison")
-    st.write(f"**Most tense:** {comparison_answers.get('most_tense_sound', 'Not answered')}")
-    st.write(f"**Favourite:** {comparison_answers.get('preferred_sound', 'Not answered')}")
-
-    st.subheader("Your Emotional Sound Map")
-    render_emotional_map(fingerprint)
-
-    st.subheader("Major and minor")
-    major_column, minor_column = st.columns(2)
-    with major_column:
-        st.markdown("#### Major")
-        st.write(f"Pleasantness: {fingerprint['major']['pleasantness']:.1f} / 7")
-        st.write(f"Tension: {fingerprint['major']['tension']:.1f} / 7")
-    with minor_column:
-        st.markdown("#### Minor")
-        st.write(f"Pleasantness: {fingerprint['minor']['pleasantness']:.1f} / 7")
-        st.write(f"Tension: {fingerprint['minor']['tension']:.1f} / 7")
-    st.write(comparison_sentence(fingerprint, "major", "minor", "major_minor"))
-
-    st.subheader("Resolution")
-    resolved_column, unresolved_column = st.columns(2)
-    with resolved_column:
-        st.markdown("#### Resolved")
-        st.write(f"Pleasantness: {fingerprint['resolved']['pleasantness']:.1f} / 7")
-        st.write(f"Tension: {fingerprint['resolved']['tension']:.1f} / 7")
-    with unresolved_column:
-        st.markdown("#### Unresolved")
-        st.write(f"Pleasantness: {fingerprint['unresolved']['pleasantness']:.1f} / 7")
-        st.write(f"Tension: {fingerprint['unresolved']['tension']:.1f} / 7")
-    st.write(comparison_sentence(fingerprint, "resolved", "unresolved", "resolution"))
-
-    st.subheader("Your emotional associations")
-    for response in sorted(responses, key=lambda item: item["trial_number"]):
-        st.write(f"**{response['sound_label']}** — {display_emotion(response)}")
-
-    st.divider()
-    st.write(
-        "This Harmonic Fingerprint describes your responses during this listening "
-        "experiment. It is not a personality or psychological diagnosis."
-    )
-    st.write(
-        "As more people take part, future versions of the experiment may allow "
-        "you to compare your responses with other listeners."
-    )
-
-    background_labels = {
-        "age_range": "Age range",
-        "grew_up_countries": "Country or countries mainly grew up in",
-        "current_country": "Current country",
-        "music_training_years": "Formal musical training",
-        "musical_activities": "Musical activities",
-        "music_genres": "Regularly listened-to music",
-        "other_music_genre": "Other type of music",
-        "weekly_listening_hours": "Weekly listening time",
-        "current_mood": "Current mood",
-        "hearing_difficulty": "Hearing difficulty",
-        "recruitment_source": "How the experiment was found",
-        "other_recruitment_source": "Other recruitment source",
-        "listening_device": "Listening device",
-    }
-    with st.expander("Development details", expanded=False):
-        st.write(f"**Participant ID:** {st.session_state.participant_id}")
-        st.write(f"**Database saved:** {st.session_state.data_saved}")
-        st.subheader("Listening responses")
-        for response in sorted(
-            fingerprint["responses"], key=lambda item: item["trial_number"]
-        ):
-            st.markdown(f"#### {response['sound_label']}")
-            st.write(f"**Actual audio filename:** {response['audio_filename']}")
-            st.write(f"**Pleasantness:** {response['pleasantness']}")
-            st.write(f"**Relaxation:** {response['relaxation']}")
-            st.write(f"**Calculated tension:** {response['tension']}")
-            st.write(f"**Emotion:** {response['emotion']}")
-            st.write(f"**Other emotion:** {response['other_emotion'] or 'Not provided'}")
-        st.subheader("Comparison answers")
-        st.write(f"**Most tense:** {comparison_answers.get('most_tense_sound', 'Not answered')}")
-        st.write(f"**Favourite:** {comparison_answers.get('preferred_sound', 'Not answered')}")
-        st.write(
-            "**Overall association:** "
-            f"{comparison_answers.get('overall_association') or 'Not provided'}"
-        )
-        st.subheader("Background questionnaire answers")
-        for key, label in background_labels.items():
-            value = st.session_state.background_answers.get(key, "")
-            if isinstance(value, list):
-                value = ", ".join(value)
-            st.write(f"**{label}:** {value or 'Not provided'}")
-
-    if st.button(
-        "Continue to Same Melody, Different Harmony",
-        type="primary",
-        use_container_width=True,
-    ):
-        start_listening_comparison("kaeru_harmony")
-        st.rerun()
-
-    st.button(
-        "Return to the beginning",
-        use_container_width=True,
-        on_click=reset_experiment,
-    )
-
-
 def calculate_kaeru_fingerprint(responses: list[dict]) -> dict:
     """Summarize same-melody ratings without interpreting personality."""
     enriched = [
@@ -1308,9 +852,9 @@ def calculate_kaeru_fingerprint(responses: list[dict]) -> dict:
     highest_count = max(emotion_counts.values())
     return {
         "responses": enriched,
-        "pleasantness": sum(item["pleasantness"] for item in enriched) / 4,
-        "tension": sum(item["tension"] for item in enriched) / 4,
-        "familiarity": sum(item["familiarity"] for item in enriched) / 4,
+        "pleasantness": sum(item["pleasantness"] for item in enriched) / len(enriched),
+        "tension": sum(item["tension"] for item in enriched) / len(enriched),
+        "familiarity": sum(item["familiarity"] for item in enriched) / len(enriched),
         "common_emotions": [
             emotion for emotion, count in emotion_counts.items() if count == highest_count
         ],
@@ -1338,11 +882,11 @@ def generate_kaeru_observations(fingerprint: dict, comparison: dict) -> list[str
     emotions = {display_emotion(item) for item in responses}
     if max(pleasantness) - min(pleasantness) <= 1 and len(emotions) > 1:
         observations.append(
-            "You gave similar pleasantness ratings to all four versions, even though their emotional descriptions differed."
+            "You gave similar pleasantness ratings to all seven versions, even though their emotional descriptions differed."
         )
     if favourite in by_label and familiar in by_label and favourite != familiar:
         observations.append(
-            "In these four versions, familiarity and preference did not directly match."
+            "In these seven versions, familiarity and preference did not directly match."
         )
     if len(observations) < 2:
         most_pleasant = max(responses, key=lambda item: item["pleasantness"])
@@ -1373,72 +917,6 @@ def render_familiarity_chart(responses: list[dict]) -> None:
     plt.close(figure)
 
 
-def show_kaeru_fingerprint() -> None:
-    responses = st.session_state.get("responses", [])
-    if len(responses) != 4:
-        st.session_state.page = "kaeru_listening"
-        st.rerun()
-    if "background_answers" not in st.session_state:
-        st.session_state.page = "background_questionnaire"
-        st.rerun()
-
-    if show_musical_personality_result():
-        return
-
-    show_back_button()
-    fingerprint = calculate_kaeru_fingerprint(responses)
-    comparison = st.session_state.get("comparison_answers", {})
-    st.title("Your Harmony Fingerprint")
-    pleasant_col, tension_col, familiar_col = st.columns(3)
-    pleasant_col.metric("Overall Pleasantness", f"{fingerprint['pleasantness']:.1f} / 7")
-    tension_col.metric("Overall Tension", f"{fingerprint['tension']:.1f} / 7")
-    familiar_col.metric("Overall Familiarity", f"{fingerprint['familiarity']:.1f} / 7")
-    st.write(f"**Most common emotion:** {fingerprint['common_emotions'][0]}")
-
-    st.subheader("What stood out in your responses?")
-    for observation in generate_kaeru_observations(fingerprint, comparison):
-        st.markdown(f"- {observation}")
-
-    st.subheader("Your direct comparison")
-    st.write(f"**Favourite:** {comparison.get('preferred_sound', 'Not answered')}")
-    st.write(f"**Most tense:** {comparison.get('most_tense_sound', 'Not answered')}")
-    st.write(f"**Most emotionally complex:** {comparison.get('most_complex_sound', 'Not answered')}")
-    st.write(f"**Most familiar:** {comparison.get('most_familiar_sound', 'Not answered')}")
-
-    st.subheader("Your Emotional Sound Map")
-    render_emotional_map(fingerprint)
-    st.subheader("Your Familiarity Ratings")
-    render_familiarity_chart(fingerprint["responses"])
-
-    with st.expander("Development details", expanded=False):
-        st.write("**Internal mapping**")
-        for sound_label, filename in KAERU_SOUNDS:
-            st.write(f"{sound_label} → {filename}")
-        st.write(f"**Participant UUID:** {st.session_state.participant_id}")
-        st.write(f"**Supabase saved status:** {st.session_state.data_saved}")
-        st.subheader("Listening responses")
-        for response in fingerprint["responses"]:
-            st.markdown(f"#### {response['sound_label']}")
-            st.write(f"**Pleasantness:** {response['pleasantness']}")
-            st.write(f"**Relaxation:** {response['relaxation']}")
-            st.write(f"**Calculated tension:** {response['tension']}")
-            st.write(f"**Familiarity:** {response['familiarity']}")
-            st.write(f"**Emotion:** {display_emotion(response)}")
-        st.subheader("Comparison answers")
-        st.json(comparison)
-        st.subheader("Background answers")
-        st.json(st.session_state.background_answers)
-
-    if st.button(
-        "Continue to Harmony and Resolution",
-        type="primary",
-        use_container_width=True,
-    ):
-        start_listening_comparison("diminished_context")
-        st.rerun()
-    st.button("Return to the beginning", use_container_width=True, on_click=reset_experiment)
-
-
 st.set_page_config(
     page_title="Can Music Read You?",
     page_icon="🎵",
@@ -1456,18 +934,13 @@ if "participant_id" not in st.session_state:
     st.session_state.participant_id = str(uuid.uuid4())
 if "data_saved" not in st.session_state:
     st.session_state.data_saved = False
-for experiment_type in ("diminished_context", "kaeru_harmony"):
-    st.session_state.setdefault(f"{experiment_type}_saved", False)
+st.session_state.setdefault("kaeru_harmony_saved", False)
 if "consent" not in st.session_state:
     st.session_state.consent = False
 if "heard_clearly" not in st.session_state:
     st.session_state.heard_clearly = None
 if st.session_state.page == "sound_check":
     show_sound_check()
-elif st.session_state.page == "listening_comparison":
-    show_listening_comparison()
-elif st.session_state.page == "part_one_complete":
-    show_part_one_complete()
 elif st.session_state.page == "kaeru_listening":
     show_kaeru_listening()
 elif st.session_state.page == "background_questionnaire":

@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
-"""Generate controlled-harmony versions of the Kaeru no Uta stimulus."""
+"""Generate piano versions of the controlled-harmony Kaeru no Uta stimulus."""
 
 from __future__ import annotations
 
 import math
+import shutil
+import struct
+import subprocess
+import tempfile
 import wave
-from array import array
 from pathlib import Path
 
 
 SAMPLE_RATE = 44_100
-SAMPLE_WIDTH = 2  # 16-bit PCM
-CHANNELS = 1
 TEMPO_BPM = 112
 SECONDS_PER_BEAT = 60.0 / TEMPO_BPM
-FADE_SECONDS = 0.008
-TARGET_PEAK = 0.90
-MELODY_LEVEL = 0.75
 ACCOMPANIMENT_LEVEL = 0.63
-
-# The same neutral, mildly piano-like additive timbre is used for every voice.
-PARTIALS = ((1, 1.0), (2, 0.20), (3, 0.08), (4, 0.03))
+PPQ = 480
+PROGRAM = 0  # General MIDI Acoustic Grand Piano
+ROOT = Path(__file__).resolve().parent
+SOUNDFONT = ROOT / "GeneralUser-GS.sf2"
 
 NOTE_MIDI = {
     "G2": 43,
     "A2": 45,
     "C3": 48,
     "D3": 50,
+    "Eb3": 51,
     "E3": 52,
     "F3": 53,
     "F#3": 54,
+    "Gb3": 54,
     "G3": 55,
     "G#3": 56,
+    "Ab3": 56,
     "A3": 57,
     "Bb3": 58,
     "B3": 59,
@@ -46,6 +48,7 @@ NOTE_MIDI = {
     "G#4": 68,
     "Ab4": 68,
     "A4": 69,
+    "Bb4": 70,
     "B4": 71,
     "C5": 72,
     "D5": 74,
@@ -57,20 +60,23 @@ CHORDS = {
     "G": ("G3", "B3", "D4"),
 }
 
+# Controlled minor counterpart to CHORDS. Roots, fifths, voicing, and register
+# are unchanged; only each major third is lowered by one semitone.
+MINOR_CHORDS = {
+    "C": ("C3", "Eb3", "G3"),
+    "F": ("F3", "Ab3", "C4"),
+    "G": ("G3", "Bb3", "D4"),
+}
+
 DIMINISHED_SEVENTH_CHORDS = {
-    **CHORDS,
-    "Bdim7": ("B3", "D4", "F4", "Ab4"),
-    "Edim7": ("E3", "G3", "Bb3", "Db4"),
-    "F#dim7": ("F#3", "A3", "C4", "Eb4"),
+    "C": ("C3", "Eb3", "Gb3", "A3"),
+    "F": ("F3", "Ab3", "B3", "D4"),
+    "G": ("G3", "Bb3", "Db4", "E4"),
 }
 
-SEVENTH_CHORDS = {
-    "C": ("C3", "E3", "G3", "B3"),
-    "F": ("F3", "A3", "C4", "E4"),
-    "G": ("G3", "B3", "D4", "F4"),
-}
-
-RICH_CHORDS = {
+# The original seventh-rich condition is the source of truth. Tuple order and
+# octaves are deliberately preserved exactly from the original implementation.
+SEVENTH_RICH_MAJOR_CHORDS = {
     "Cmaj7": ("C3", "E3", "G3", "B3"),
     "E7": ("E3", "G#3", "B3", "D4"),
     "Am7": ("A2", "C3", "E3", "G3"),
@@ -81,50 +87,35 @@ RICH_CHORDS = {
     "C": ("C3", "E3", "G3"),
 }
 
-# Consistent open ninth-chord voicings: root, fifth, seventh, ninth, third.
-# The upper tones are spread above the bass/fifth to keep the five-note
-# accompaniment clear while retaining every chord-defining tone.
-NINTH_CHORDS = {
-    "Cmaj9": ("C3", "G3", "B3", "D4", "E4"),
-    "E9": ("E3", "B3", "D4", "F#4", "G#4"),
-    "Am9": ("A2", "E3", "G3", "B3", "C4"),
-    "C9": ("C3", "G3", "Bb3", "D4", "E4"),
-    "Fmaj9": ("F3", "C4", "E4", "G4", "A4"),
-    "Dm9": ("D3", "A3", "C4", "E4", "F4"),
-    "G9": ("G2", "D3", "F3", "A3", "B3"),
+# Corresponding minor harmony: lower only major thirds. Chords already minor
+# in the original rich progression remain untouched.
+SEVENTH_RICH_MINOR_CHORDS = {
+    "Cmaj7": ("C3", "Eb3", "G3", "B3"),
+    "E7": ("E3", "G3", "B3", "D4"),
+    "Am7": ("A2", "C3", "E3", "G3"),
+    "C7": ("C3", "Eb3", "G3", "Bb3"),
+    "F": ("F3", "Ab3", "C4"),
+    "Dm7": ("D3", "F3", "A3", "C4"),
+    "G": ("G3", "Bb3", "D4"),
+    "C": ("C3", "Eb3", "G3"),
 }
 
-# Controlled ninth-chord condition derived directly from the basic triads.
-# Each voicing consistently uses root, seventh, ninth, third, then fifth in the
-# upper register. The tuple order is root, fifth, seventh, ninth, third so the
-# chord construction remains easy to audit. The names remain C/F/G so the
-# control's HARMONY_BY_MEASURE is reused without any timing/progression changes.
-NINTHS_FROM_BASIC_CHORDS = {
-    "C": ("C3", "G4", "B3", "D4", "E4"),       # Cmaj9
-    "F": ("F3", "C5", "E4", "G4", "A4"),       # Fmaj9
-    "G": ("G3", "D5", "F4", "A4", "B4"),       # G9
+# Ninth-rich is mechanically the corresponding seventh-rich tuple plus one
+# ninth. Nothing in the source voicing is reordered, removed, doubled, or moved.
+RICH_NINTH_BY_CHORD = {
+    "Cmaj7": "D4", "E7": "F#4", "Am7": "B3", "C7": "D4",
+    "F": "G4", "Dm7": "E4", "G": "A4", "C": "D4",
+}
+NINTH_RICH_MAJOR_CHORDS = {
+    name: notes + (RICH_NINTH_BY_CHORD[name],)
+    for name, notes in SEVENTH_RICH_MAJOR_CHORDS.items()
+}
+NINTH_RICH_MINOR_CHORDS = {
+    name: notes + (RICH_NINTH_BY_CHORD[name],)
+    for name, notes in SEVENTH_RICH_MINOR_CHORDS.items()
 }
 
-NINTHS_FROM_BASIC_NAMES = {
-    "C": "Cmaj9",
-    "F": "Fmaj9",
-    "G": "G9",
-}
-
-# Eight 4/4 measures transcribed from the control-condition score. ``None`` is
-# an explicit rest, retained here so the score rhythm remains easy to audit and
-# reuse in later harmony conditions.
-MELODY = (
-    ("C4", 1), ("D4", 1), ("E4", 1), ("F4", 1),
-    ("E4", 1), ("D4", 1), ("C4", 1), (None, 1),
-    ("E4", 1), ("F4", 1), ("G4", 1), ("A4", 1),
-    ("G4", 1), ("F4", 1), ("E4", 1), (None, 1),
-    ("C4", 1), (None, 1), ("C4", 1), (None, 1),
-    ("C4", 1), (None, 1), ("C4", 1), (None, 1),
-    ("C4", 0.5), ("C4", 0.5), ("D4", 0.5), ("D4", 0.5),
-    ("E4", 0.5), ("E4", 0.5), ("F4", 0.5), ("F4", 0.5),
-    ("E4", 1), ("D4", 1), ("C4", 1), (None, 1),
-)
+ARRANGEMENT_BEATS = 32
 
 # One entry per beat; ``None`` means the notated quarter rest. Harmony is kept
 # separate so later conditions can replace chord tones without changing timing.
@@ -153,178 +144,128 @@ RICH_HARMONY_BY_MEASURE = (
     ("G", "G", "C", None),
 )
 
-NINTH_HARMONY_BY_MEASURE = (
-    ("Cmaj9", None, "Cmaj9", None),
-    ("E9", "E9", "E9", None),
-    ("Am9", None, "Am9", None),
-    ("C9", "C9", "C9", None),
-    (None, "Fmaj9", None, "Fmaj9"),
-    (None, "Fmaj9", None, "Fmaj9"),
-    ("Dm9", "Dm9", "G9", "G9"),
-    ("Cmaj9", "Cmaj9", "Cmaj9", None),
-)
-
-# Harmony-only experimental condition. Every tuple retains the control's four
-# beat slots exactly; only selected existing chord attacks are substituted.
-DIMINISHED_SEVENTH_HARMONY_BY_MEASURE = (
-    ("C", None, "C", None),
-    ("C", "Bdim7", "C", None),
-    ("C", None, "C", None),
-    ("Edim7", "F", "C", None),
-    (None, "C", None, "C"),
-    (None, "C", None, "C"),
-    ("F#dim7", "G", "C", "F"),
-    ("C", "Bdim7", "C", None),
-)
-
 ACCOMPANIMENT_OPTIONS = {
-    "basic_triads": (CHORDS, HARMONY_BY_MEASURE),
-    "ninths_from_basic": (NINTHS_FROM_BASIC_CHORDS, HARMONY_BY_MEASURE),
-    "legacy_sevenths": (SEVENTH_CHORDS, HARMONY_BY_MEASURE),
-    "sevenths_rich": (RICH_CHORDS, RICH_HARMONY_BY_MEASURE),
-    "ninths": (NINTH_CHORDS, NINTH_HARMONY_BY_MEASURE),
+    "basic_major": (CHORDS, HARMONY_BY_MEASURE),
+    "basic_triads_minor": (MINOR_CHORDS, HARMONY_BY_MEASURE),
+    "seventh_rich_major": (SEVENTH_RICH_MAJOR_CHORDS, RICH_HARMONY_BY_MEASURE),
+    "seventh_rich_minor": (SEVENTH_RICH_MINOR_CHORDS, RICH_HARMONY_BY_MEASURE),
+    "ninth_rich_major": (NINTH_RICH_MAJOR_CHORDS, RICH_HARMONY_BY_MEASURE),
+    "ninth_rich_minor": (NINTH_RICH_MINOR_CHORDS, RICH_HARMONY_BY_MEASURE),
     "diminished_sevenths": (
         DIMINISHED_SEVENTH_CHORDS,
-        DIMINISHED_SEVENTH_HARMONY_BY_MEASURE,
+        HARMONY_BY_MEASURE,
     ),
 }
 
 
-def frequency(note: str) -> float:
-    """Equal-tempered frequency with A4 fixed at 440 Hz."""
-    return 440.0 * 2.0 ** ((NOTE_MIDI[note] - 69) / 12.0)
+def variable_length(value: int) -> bytes:
+    """Encode a nonnegative integer as a MIDI variable-length quantity."""
+    out = [value & 0x7F]
+    value >>= 7
+    while value:
+        out.append((value & 0x7F) | 0x80)
+        value >>= 7
+    return bytes(reversed(out))
 
 
-def add_tone(
-    mix: list[float], note: str, start_beat: float, beats: float, level: float
-) -> None:
-    """Add one deterministic tone with short raised-cosine edge fades."""
-    start = round(start_beat * SECONDS_PER_BEAT * SAMPLE_RATE)
-    end = round((start_beat + beats) * SECONDS_PER_BEAT * SAMPLE_RATE)
-    frame_count = end - start
-    fade_frames = min(round(FADE_SECONDS * SAMPLE_RATE), frame_count // 2)
-    hz = frequency(note)
-
-    for frame in range(frame_count):
-        time = frame / SAMPLE_RATE
-        value = sum(
-            amplitude * math.sin(2.0 * math.pi * hz * harmonic * time)
-            for harmonic, amplitude in PARTIALS
-        ) / sum(amplitude for _, amplitude in PARTIALS)
-
-        if frame < fade_frames:
-            envelope = 0.5 - 0.5 * math.cos(math.pi * frame / fade_frames)
-        elif frame >= frame_count - fade_frames:
-            remaining = frame_count - 1 - frame
-            envelope = 0.5 - 0.5 * math.cos(math.pi * remaining / fade_frames)
-        else:
-            envelope = 1.0
-        mix[start + frame] += level * envelope * value
-
-
-def build_melody() -> list[float]:
-    """Render the shared melody independently of any harmony option."""
-    total_beats = sum(beats for _, beats in MELODY)
-    melody = [0.0] * round(total_beats * SECONDS_PER_BEAT * SAMPLE_RATE)
-    beat = 0.0
-    for note, duration in MELODY:
-        if note is not None:
-            add_tone(melody, note, beat, duration, MELODY_LEVEL)
-        beat += duration
-    return melody
-
-
-def build_accompaniment(
+def make_midi(
+    path: Path,
     chords: dict[str, tuple[str, ...]],
     harmony_by_measure: tuple[tuple[str | None, ...], ...],
-) -> list[float]:
-    """Render chord tones using the arrangement's fixed attack/rest grid."""
-    total_beats = sum(beats for _, beats in MELODY)
-    accompaniment = [0.0] * round(total_beats * SECONDS_PER_BEAT * SAMPLE_RATE)
+) -> None:
+    """Write the chord accompaniment with no right-hand notes."""
+    events: list[tuple[int, int, bytes]] = []
+    tempo_us = round(60_000_000 / TEMPO_BPM)
+    events.append((0, 0, b"\xff\x51\x03" + tempo_us.to_bytes(3, "big")))
+    events.append((0, 1, b"\xff\x58\x04\x04\x02\x18\x08"))  # 4/4
+    # Channel 1 is the left-hand accompaniment. Channel 0 is intentionally
+    # unused so every Kaeru stimulus contains zero right-hand MIDI notes.
+    events.append((0, 11, bytes((0xC1, PROGRAM))))
+
     for measure_index, measure in enumerate(harmony_by_measure):
         for beat_index, chord_name in enumerate(measure):
             if chord_name is None:
                 continue
-            start = measure_index * 4 + beat_index
+            start = (measure_index * 4 + beat_index) * PPQ
+            end = start + PPQ
             # Equal-power distribution makes ACCOMPANIMENT_LEVEL describe the
             # perceived level of the complete chord, rather than each note.
-            chord_level = ACCOMPANIMENT_LEVEL / math.sqrt(len(chords[chord_name]))
+            velocity = round(
+                ACCOMPANIMENT_LEVEL / math.sqrt(len(chords[chord_name])) * 127
+            )
             for note in chords[chord_name]:
-                add_tone(accompaniment, note, start, 1, chord_level)
-    return accompaniment
+                midi_note = NOTE_MIDI[note]
+                events.append((start, 60, bytes((0x91, midi_note, velocity))))
+                events.append((end, 30, bytes((0x81, midi_note, 0))))
+
+    final_tick = ARRANGEMENT_BEATS * PPQ
+    events.append((final_tick, 100, b"\xff\x2f\x00"))
+    events.sort(key=lambda event: (event[0], event[1]))
+    track = bytearray()
+    prior_tick = 0
+    for tick, _, payload in events:
+        track += variable_length(tick - prior_tick) + payload
+        prior_tick = tick
+    header = b"MThd" + struct.pack(">IHHH", 6, 0, 1, PPQ)
+    path.write_bytes(header + b"MTrk" + struct.pack(">I", len(track)) + track)
 
 
-def build_mix(
-    chords: dict[str, tuple[str, ...]],
-    harmony_by_measure: tuple[tuple[str | None, ...], ...] = HARMONY_BY_MEASURE,
-) -> list[float]:
-    """Build an unnormalized mix from the shared melody and harmony timing."""
-    melody = build_melody()
-    accompaniment = build_accompaniment(chords, harmony_by_measure)
-    return [
-        melody_sample + chord_sample
-        for melody_sample, chord_sample in zip(melody, accompaniment)
-    ]
+def render(midi_path: Path, wav_path: Path) -> None:
+    """Render MIDI through the same acoustic-grand preset for every stimulus."""
+    fluidsynth = shutil.which("fluidsynth")
+    if not fluidsynth:
+        raise RuntimeError("FluidSynth is required (for macOS: brew install fluid-synth)")
+    if not SOUNDFONT.exists():
+        raise RuntimeError(f"Missing SoundFont: {SOUNDFONT}")
+    subprocess.run(
+        [
+            fluidsynth, "-ni", "-R", "0", "-C", "0", "-r", str(SAMPLE_RATE),
+            "-g", "0.7", "-F", str(wav_path), str(SOUNDFONT), str(midi_path),
+        ],
+        check=True,
+    )
 
 
-def render(
-    chords: dict[str, tuple[str, ...]] = CHORDS,
-    harmony_by_measure: tuple[tuple[str | None, ...], ...] = HARMONY_BY_MEASURE,
-) -> list[float]:
-    mix = build_mix(chords, harmony_by_measure)
-    # Use the control stimulus's gain for every condition. Independently peak-
-    # normalizing each harmony would change the otherwise identical melody level.
-    control_mix = mix if chords is CHORDS else build_mix(CHORDS)
-    control_peak = max(abs(sample) for sample in control_mix)
-    gain = TARGET_PEAK / control_peak
-    rendered = [sample * gain for sample in mix]
-    # Dense five-note voicings can sum above full scale even though their
-    # accompaniment uses the same equal-power level. If needed, apply one
-    # uniform safety gain to the whole mix so the part-to-part balance remains
-    # unchanged and no limiter or other dynamics processing is introduced.
-    rendered_peak = max(abs(sample) for sample in rendered)
-    if rendered_peak > 1.0:
-        safety_gain = TARGET_PEAK / rendered_peak
-        rendered = [sample * safety_gain for sample in rendered]
-    return rendered
-
-
-def write_wav(path: Path, samples: list[float]) -> None:
-    pcm = array("h", (round(sample * 32767) for sample in samples))
-    with wave.open(str(path), "wb") as wav_file:
-        wav_file.setnchannels(CHANNELS)
-        wav_file.setsampwidth(SAMPLE_WIDTH)
-        wav_file.setframerate(SAMPLE_RATE)
-        wav_file.writeframes(pcm.tobytes())
+def trim_to_arrangement(path: Path, total_beats: float) -> None:
+    """Remove FluidSynth's added tail without changing the score duration."""
+    frame_count = round(total_beats * SECONDS_PER_BEAT * SAMPLE_RATE)
+    with wave.open(str(path), "rb") as source:
+        params = source.getparams()
+        frames = source.readframes(frame_count)
+    with wave.open(str(path), "wb") as destination:
+        destination.setparams(params)
+        destination.writeframes(frames)
 
 
 def main() -> None:
     output_options = {
-        "kaeru_basic_triads.wav": "basic_triads",
-        "kaeru_sevenths.wav": "legacy_sevenths",
-        "kaeru_sevenths_rich.wav": "sevenths_rich",
-        "kaeru_ninths.wav": "ninths",
-        "kaeru_ninths_from_basic.wav": "ninths_from_basic",
-        "kaeru_diminished_sevenths.wav": "diminished_sevenths",
+        "kaeru_basic_major.wav": "basic_major",
+        "kaeru_basic_minor.wav": "basic_triads_minor",
+        "kaeru_seventh_rich_major.wav": "seventh_rich_major",
+        "kaeru_seventh_rich_minor.wav": "seventh_rich_minor",
+        "kaeru_ninth_rich_major.wav": "ninth_rich_major",
+        "kaeru_ninth_rich_minor.wav": "ninth_rich_minor",
+        "kaeru_diminished_seventh.wav": "diminished_sevenths",
     }
-    output_dir = Path(__file__).resolve().parent
-    total_beats = sum(beats for _, beats in MELODY)
+    total_beats = ARRANGEMENT_BEATS
 
     print(f"Tempo: {TEMPO_BPM} BPM")
     print(f"Duration: {total_beats * SECONDS_PER_BEAT:.6f} seconds")
     for filename, option in output_options.items():
-        output_path = output_dir / filename
-        if not output_path.exists():
-            print(f"Skipped {filename} (not present)")
-            continue
+        output_path = ROOT / filename
         chords, harmony = ACCOMPANIMENT_OPTIONS[option]
-        samples = render(chords, harmony)
-        write_wav(output_path, samples)
-        peak = max(abs(sample) for sample in samples)
-        print(
-            f"Created {filename}: {len(samples)} frames, "
-            f"{SAMPLE_RATE} Hz, peak {peak:.6f}"
-        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            midi_path = Path(temp_dir) / "kaeru.mid"
+            rendered_path = Path(temp_dir) / filename
+            make_midi(midi_path, chords, harmony)
+            render(midi_path, rendered_path)
+            trim_to_arrangement(rendered_path, total_beats)
+            rendered_path.replace(output_path)
+        with wave.open(str(output_path), "rb") as wav_file:
+            print(
+                f"Created {filename}: {wav_file.getnframes()} frames, "
+                f"{wav_file.getframerate()} Hz, acoustic grand piano"
+            )
 
 
 if __name__ == "__main__":
