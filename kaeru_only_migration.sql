@@ -14,6 +14,8 @@ alter table public.responses
         )
     );
 
+drop function if exists public.save_completed_experiment(jsonb, jsonb, jsonb);
+
 create or replace function public.save_completed_experiment(
     p_participant jsonb,
     p_submission jsonb,
@@ -21,7 +23,7 @@ create or replace function public.save_completed_experiment(
 )
 returns void
 language plpgsql
-security invoker
+security definer
 set search_path = ''
 as $$
 begin
